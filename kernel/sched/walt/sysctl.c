@@ -20,7 +20,9 @@ static int one_hundred = 100;
 static int one_thousand = 1000;
 static int one_thousand_twenty_four = 1024;
 static int two_thousand = 2000;
+#if !IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 static int walt_max_cpus = WALT_NR_CPUS;
+#endif
 
 /*
  * CFS task prio range is [100 ... 139]
@@ -90,6 +92,8 @@ unsigned int sysctl_sched_sbt_delay_windows;
 unsigned int high_perf_cluster_freq_cap[MAX_CLUSTERS];
 unsigned int sysctl_sched_pipeline_cpus;
 unsigned int fmax_cap[MAX_FREQ_CAP][MAX_CLUSTERS];
+EXPORT_SYMBOL(fmax_cap);
+
 /* Entries for 4 clusters and 10 tuples(3 item in each tuple */
 unsigned int sysctl_cluster_arr[4][MAX_FREQ_RELATIONS * TUPLE_SIZE] = {
 					[0] = {0, 0, 0},
@@ -608,7 +612,7 @@ int sched_updown_migrate_handler(struct ctl_table *table, int write,
 	int val[MAX_MARGIN_LEVELS];
 	struct ctl_table tmp = {
 		.data	= &val,
-		.maxlen	= sizeof(int) * cap_margin_levels,
+		.maxlen	= sizeof(int) * MAX_MARGIN_LEVELS,
 		.mode	= table->mode,
 	};
 
@@ -618,7 +622,9 @@ int sched_updown_migrate_handler(struct ctl_table *table, int write,
 	mutex_lock(&mutex);
 
 	if (!write) {
-		ret = proc_dointvec(table, write, buffer, lenp, ppos);
+		tmp.maxlen = sizeof(int) * cap_margin_levels;
+		tmp.data = table->data;
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
 		goto unlock_mutex;
 	}
 
@@ -698,7 +704,7 @@ int sched_updown_early_migrate_handler(struct ctl_table *table, int write,
 	int val[MAX_MARGIN_LEVELS];
 	struct ctl_table tmp = {
 		.data	= &val,
-		.maxlen	= sizeof(int) * cap_margin_levels,
+		.maxlen	= sizeof(int) * MAX_MARGIN_LEVELS,
 		.mode	= table->mode,
 	};
 
@@ -708,7 +714,9 @@ int sched_updown_early_migrate_handler(struct ctl_table *table, int write,
 	mutex_lock(&mutex);
 
 	if (!write) {
-		ret = proc_dointvec(table, write, buffer, lenp, ppos);
+		tmp.maxlen = sizeof(int) * cap_margin_levels;
+		tmp.data = table->data;
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
 		goto unlock_mutex;
 	}
 
@@ -759,21 +767,22 @@ int sched_fmax_cap_handler(struct ctl_table *table, int write,
 	int ret, i;
 	unsigned int *data = (unsigned int *)table->data;
 	static DEFINE_MUTEX(mutex);
-	int cap_margin_levels = num_sched_clusters;
 	int val[MAX_CLUSTERS];
 	struct ctl_table tmp = {
 		.data	= &val,
-		.maxlen	= sizeof(int) * cap_margin_levels,
+		.maxlen	= sizeof(int) * MAX_CLUSTERS,
 		.mode	= table->mode,
 	};
 
-	if (cap_margin_levels <= 0)
+	if (num_sched_clusters <= 0)
 		return -EINVAL;
 
 	mutex_lock(&mutex);
 
 	if (!write) {
-		ret = proc_dointvec(table, write, buffer, lenp, ppos);
+		tmp.maxlen = sizeof(int) * num_sched_clusters;
+		tmp.data = table->data;
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
 		goto unlock_mutex;
 	}
 
@@ -781,13 +790,14 @@ int sched_fmax_cap_handler(struct ctl_table *table, int write,
 	if (ret)
 		goto unlock_mutex;
 
-	for (i = 0; i < cap_margin_levels; i++) {
+	for (i = 0; i < num_sched_clusters; i++) {
 		if (val[i] < 0) {
 			ret = -EINVAL;
 			goto unlock_mutex;
 		}
 		data[i] = val[i];
 	}
+
 unlock_mutex:
 	mutex_unlock(&mutex);
 	return ret;
@@ -822,8 +832,24 @@ int sched_idle_enough_clust_handler(struct ctl_table *table, int write,
 				    loff_t *ppos)
 {
 	int ret;
+	int val[MAX_CLUSTERS];
+	struct ctl_table tmp = {
+		.data	= &val,
+		.maxlen	= sizeof(unsigned int) * MAX_CLUSTERS,
+		.mode	= table->mode,
+	};
+
+	if (num_sched_clusters <= 0)
+		return -EINVAL;
 
 	mutex_lock(&idle_enough_mutex);
+
+	if (!write) {
+		tmp.maxlen = sizeof(unsigned int) * num_sched_clusters;
+		tmp.data = table->data;
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
+		goto unlock_mutex;
+	}
 
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	if (ret)
@@ -867,8 +893,24 @@ int sched_cluster_util_thres_pct_clust_handler(struct ctl_table *table, int writ
 					       loff_t *ppos)
 {
 	int ret;
+	int val[MAX_CLUSTERS];
+	struct ctl_table tmp = {
+		.data	= &val,
+		.maxlen	= sizeof(int) * MAX_CLUSTERS,
+		.mode	= table->mode,
+	};
+
+	if (num_sched_clusters <= 0)
+		return -EINVAL;
 
 	mutex_lock(&util_thres_mutex);
+
+	if (!write) {
+		tmp.maxlen = sizeof(int) * num_sched_clusters;
+		tmp.data = table->data;
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
+		goto unlock_mutex;
+	}
 
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	if (ret)
@@ -914,7 +956,6 @@ struct ctl_table input_boost_sysctls[] = {
 	},
 	{ }
 };
-
 struct ctl_table walt_table[] = {
 	{
 		.procname	= "sched_user_hint",
@@ -1280,6 +1321,7 @@ struct ctl_table walt_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_task_handler,
 	},
+#if !IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 	{
 		.procname	= "sched_pipeline",
 		.data		= (int *) PIPELINE,
@@ -1287,6 +1329,7 @@ struct ctl_table walt_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_task_handler,
 	},
+#endif
 	{
 		.procname	= "task_load_boost",
 		.data		= (int *) LOAD_BOOST,
@@ -1400,6 +1443,7 @@ struct ctl_table walt_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &one_thousand_twenty_four,
 	},
+#if !IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
 	{
 		.procname	= "sched_heavy_nr",
 		.data		= &sysctl_sched_heavy_nr,
@@ -1409,6 +1453,17 @@ struct ctl_table walt_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &walt_max_cpus,
 	},
+#else
+	{
+		.procname	= "enable_pipeline_boost",
+		.data		= &enable_pipeline_boost,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0664,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif
 	{
 		.procname	= "sched_sbt_enable",
 		.data		= &sysctl_sched_sbt_enable,
